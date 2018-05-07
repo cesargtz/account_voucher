@@ -4,8 +4,10 @@
 
 from odoo import fields, models, api, _
 import odoo.addons.decimal_precision as dp
+import logging
 from odoo.exceptions import UserError
 
+_logger = logging.getLogger(__name__)
 
 class AccountVoucher(models.Model):
     _name = 'account.voucher'
@@ -163,9 +165,9 @@ class AccountVoucher(models.Model):
     def first_move_line_get(self, move_id, company_currency, current_currency):
         debit = credit = 0.0
         if self.voucher_type == 'purchase':
-            credit = self._convert_amount(self.amount)
+            credit = round(self._convert_amount(self.amount),4)
         elif self.voucher_type == 'sale':
-            debit = self._convert_amount(self.amount)
+            debit = round(self._convert_amount(self.amount),4)
         if debit < 0.0: debit = 0.0
         if credit < 0.0: credit = 0.0
         sign = debit - credit < 0 and -1 or 1
@@ -184,6 +186,7 @@ class AccountVoucher(models.Model):
                 'date': self.account_date,
                 'date_maturity': self.date_due
             }
+        # _logger.critical("first_move_line_get:  %s" % (move_line))
         return move_line
 
     @api.multi
@@ -219,7 +222,7 @@ class AccountVoucher(models.Model):
         :rtype: float
         '''
         for voucher in self:
-            return voucher.currency_id.compute(amount, voucher.company_id.currency_id)
+            return voucher.currency_id.compute(amount, voucher.company_id.currency_id, False)
 
     @api.multi
     def voucher_move_line_create(self, line_total, move_id, company_currency, current_currency):
@@ -243,7 +246,7 @@ class AccountVoucher(models.Model):
             # convert the amount set on the voucher line into the currency of the voucher's company
             # this calls res_curreny.compute() with the right context,
             # so that it will take either the rate on the voucher if it is relevant or will use the default behaviour
-            amount = self._convert_amount(line.price_unit*line.quantity)
+            amount = round(self._convert_amount(line.price_unit*line.quantity),4)
             move_line = {
                 'journal_id': self.journal_id.id,
                 'name': line.name or '/',
@@ -256,13 +259,15 @@ class AccountVoucher(models.Model):
                 'debit': abs(amount) if self.voucher_type == 'purchase' else 0.0,
                 'date': self.account_date,
                 'tax_ids': [(4,t.id) for t in line.tax_ids],
-                'amount_currency': line.price_subtotal if current_currency != company_currency else 0.0,
+                'amount_currency': line.price_subtotal  if current_currency != company_currency else 0.0,
                 'currency_id': company_currency != current_currency and current_currency or False,
             }
-	    if current_currency != company_currency:
+
+    	    if current_currency != company_currency:
                 if self.voucher_type == 'sale':
                     move_line['amount_currency'] = move_line['amount_currency'] * -1
             self.env['account.move.line'].with_context(apply_taxes=True).create(move_line)
+        #     _logger.critical("voucher_move_line_create %s" % (move_line))
         return line_total
 
     @api.multi
@@ -397,12 +402,12 @@ class AccountVoucherLine(models.Model):
         }
 
         if type == 'purchase':
-            values['price_unit'] = price_unit or product.standard_price
+            values['price_unit'] = self.price_unit
             taxes = product.supplier_taxes_id or account.tax_ids
             if product.description_purchase:
                 values['name'] += '\n' + product.description_purchase
         else:
-            values['price_unit'] = product.lst_price
+            values['price_unit'] = self.price_unit
             taxes = product.taxes_id or account.tax_ids
             if product.description_sale:
                 values['name'] += '\n' + product.description_sale
@@ -411,8 +416,8 @@ class AccountVoucherLine(models.Model):
 
         if company and currency:
             if company.currency_id != currency:
-                if type == 'purchase':
-                    values['price_unit'] = product.standard_price
-                values['price_unit'] = values['price_unit'] * currency.rate
+                # if type == 'purchase':
+                values['price_unit'] = self.price_unit
+                # values['price_unit'] = values['price_unit'] * currency.rate
 
         return {'value': values, 'domain': {}}
